@@ -1,0 +1,693 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    <meta name="viewport" content="initial-scale=1, maximum-scale=1,user-scalable=no">
+    <title>Directions Widget</title>
+    <link rel="stylesheet" href="https://js.arcgis.com/3.15/dojo/resources/dojo.css">
+    <link rel="stylesheet" href="https://js.arcgis.com/3.15/dgrid/css/dgrid.css">
+    <link rel="stylesheet" href="https://js.arcgis.com/3.15/dgrid/css/skins/claro.css">
+    <link rel="stylesheet" href="https://js.arcgis.com/3.15/dijit/themes/claro/claro.css">
+    <link rel="stylesheet" href="https://js.arcgis.com/3.15/esri/css/esri.css">
+    
+    <style>
+      html, body, #map {
+        height:100%;
+        width:100%;
+        margin:0;
+        padding:0;
+      }
+      body {
+        background-color:#FFF;
+        overflow:hidden;
+        font-family:"Trebuchet MS";
+      }    
+      #bottomPane { height: 200px; }
+      #topPane { height: 30px; }
+      #grid { height: 100%; }
+      .dgrid { border: none; }
+      .field-id { cursor: pointer; }
+
+    </style>
+
+    <script src="https://js.arcgis.com/3.15/"></script>
+    <script>
+      require([
+        "dojo/ready",
+        "dgrid/List",
+        "dgrid/OnDemandGrid",
+        "dgrid/extensions/ColumnResizer",
+        "dgrid/Selection",
+        "dgrid/Keyboard", "dgrid/editor",
+        "dojo/store/Observable",
+        "dojo/store/Memory", 
+        "dojo/data/ObjectStore",
+        "dojo/_base/array",
+        "dojo/dom-style",
+        "dijit/registry",
+        "esri/map", 
+        "esri/tasks/locator",
+        "esri/layers/FeatureLayer", 
+        "esri/symbols/SimpleFillSymbol",
+        "esri/tasks/QueryTask",
+        "esri/tasks/query",
+        "dojo/_base/declare", 
+        "dojo/number", 
+        "dojo/on", 
+        "esri/urlUtils", "esri/map", "esri/dijit/Directions", "dijit/Dialog", "dijit/form/Select",
+        "dojo/parser", "dojo/store/DataStore", "dojox/data/CsvStore","dojo/dom",
+        "dojo/dom-construct","dojo/_base/array",
+        "dojo/_base/lang", "esri/tasks/AddressCandidate", "esri/graphic",
+        "dijit/layout/BorderContainer", "dijit/layout/ContentPane", "dijit/layout/TabContainer", "dojo/domReady!"
+      ], function( ready, List, 
+        Grid, ColumnResizer,
+        Selection, Keyboard, Editor,
+        Observable, Memory, 
+        ObjectStore,
+        array,
+        domStyle,
+        registry,
+        Map, 
+        Locator,
+        FeatureLayer, 
+        SimpleFillSymbol,
+        QueryTask,
+        Query,
+        declare, 
+        dojoNum, 
+        on, 
+        urlUtils, Map, Directions, Dialog, Select,
+        parser, DataStore, CsvStore, dom, domConstruct, arrayUtils, lang, AddressCandidate, Graphic
+      ) {
+      ready(function() {
+        var originalFields = [];
+        //var fields = ["ResultID","Loc_name","Status","Score","Match_addr","Addr_type","Type","PlaceName","Place_addr","Phone","URL","Rank",
+          //        "AddBldg","AddNum","AddNumFrom","AddNumTo","Side","StPreDir","StPreType","StName","StType","StDir","StAddr","Nbrhd",
+          //        "City","Subregion","Region","Postal","PostalExt","Country","LangCode","Distance","X","Y","DisplayX","DisplayY",
+          //       "Xmin","Xmax","Ymin","Ymax"];
+        var locatorDisplayfields = ["ResultID","Loc_name","Status","Score","Match_addr","Addr_type",
+                "City","Region","Postal","PostalExt"];
+        var uniqueIdField = "OBJECTID";
+        var orginalDataStore;
+        var geocodeDataStore;
+        var geocodeService = "http://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer";
+      
+        parser.parse();
+        //all requests to route.arcgis.com will proxy to the proxyUrl defined in this object.
+        urlUtils.addProxyRule({
+          urlPrefix: "route.arcgis.com",  
+          proxyUrl: "proxy/proxy.ashx"
+        });
+        urlUtils.addProxyRule({
+          urlPrefix: "traffic.arcgis.com",  
+          proxyUrl: "proxy/proxy.ashx"
+        });
+        urlUtils.addProxyRule({
+          urlPrefix: "geocode.arcgis.com",  
+          proxyUrl: "proxy/proxy.ashx"
+        });
+
+        on(dom.byId("geocode"), "click", geocodeAddress);
+        on(dom.byId("routeStops"), "click", addRouteStops);
+        
+        var map = new Map("map", {
+          basemap: "topo",
+          center:[-98.56,39.82],
+          zoom: 4
+        });
+        
+        var locator = new Locator(geocodeService);
+        locator.on("addresses-to-locations-complete", function(results){
+        require([
+            "esri/geometry/Point", "esri/symbols/SimpleMarkerSymbol",
+            "esri/Color", "esri/InfoTemplate", "esri/graphic" 
+          ], function(Point, SimpleMarkerSymbol, Color, InfoTemplate, Graphic) {
+          
+            arrayUtils.forEach(results.addresses, function(result){
+              result.ResultID = result.attributes.ResultID;
+            });
+            var recs1 = orginalDataStore.query();
+            var i = 0;
+            geocodeDataStore = Observable(new Memory({data: results.addresses, idProperty: "ResultID"}));
+            var resultsSort = geocodeDataStore.query({}, {sort: [{attribute: "ResultID"}]});
+            
+            arrayUtils.forEach(resultsSort, function(result){
+              lang.mixin(recs1[i], result.attributes);
+              
+              if (result.location.x && result.location.y) {
+                var pt = result.location;
+                var sms = new SimpleMarkerSymbol().setStyle(
+                  SimpleMarkerSymbol.STYLE_SQUARE).setColor(
+                  new Color([255,0,0,0.5]));
+                var infoTemplate = new InfoTemplate("Attributes", "${*}");
+                var graphic = new Graphic(pt,sms,recs1[i],infoTemplate);
+                map.graphics.add(graphic);
+              }
+              i++;
+            });
+            
+            if (map.graphics.graphics.length > 1) {
+              require(["esri/graphicsUtils"], function(graphicsUtils) { 
+                var extGraphics = graphicsUtils.graphicsExtent(map.graphics.graphics);
+                map.setExtent(extGraphics, true)
+              });
+              
+            }
+            
+            geocodeDataStore.setData(recs1);
+            var fieldsArray = getFieldsFromStore(geocodeDataStore);
+            var getColumns = window.getColumns = function(editOn){
+              return arrayUtils.map(fieldsArray, function (column) {
+                column.autoSave = true;
+                if(editOn){
+                  column.editOn = editOn;
+                }
+                return Editor(column);
+              });
+            }              
+            
+            window.grid2 = new (declare([Grid, Keyboard, ColumnResizer, Selection]))({
+              // use Infinity so that all data is available in the grid
+              //bufferRows: Infinity,
+              sort: uniqueIdField,
+              columns: getColumns("dblclick"),
+              selectionMode: "single"
+            }, "grid2");
+            grid2.set("store", geocodeDataStore, { Status: "U" });
+            grid2.on('dgrid-select', function (event) {
+              console.log('Row selected: ', event.rows[0].data);
+              getCandidates(event.rows[0].data);
+            });
+            var q = geocodeDataStore.query({ Status: "U" });
+            registry.byId("tab2").set("title", "Unmatched (" + q.length + ")");
+            registry.byId("mainTabContainer").selectChild(registry.byId("tab3"));
+            window.grid3 = new (declare([Grid, Keyboard, ColumnResizer]))({
+              // use Infinity so that all data is available in the grid
+              //bufferRows: Infinity,
+              sort: uniqueIdField,
+              columns: getColumns("dblclick"),
+              selectionMode: "single"
+            }, "grid3");
+            grid3.set("store", geocodeDataStore, { Status: "M" });
+            var q = geocodeDataStore.query({ Status: "M" });
+            registry.byId("tab3").set("title", "Matched (" + q.length + ")");
+            grid3.on(".field-ResultID:click", selectState);
+          });
+          
+          console.log(results);
+        });
+        
+        map.on("load", function( evt ){
+          // show the border container now that the dijits 
+          // are rendered and the map has loaded
+          //domStyle.set(registry.byId("container").domNode, "visibility", "visible");
+          //populateGrid(Memory); // pass a reference to the MemoryStore constructor
+          //geocodeAddress();
+        });
+        
+        map.on("click", function( evt ){
+          // show the border container now that the dijits 
+          // are rendered and the map has loaded
+          //domStyle.set(registry.byId("container").domNode, "visibility", "visible");
+          //populateGrid(Memory); // pass a reference to the MemoryStore constructor
+          //geocodeAddress();
+        });
+        
+        setupDropZone();
+
+        function setupDropZone () {
+          // Let's verify that we have proper browser support, before
+          // moving ahead. You can also use a library like Modernizr
+          // to detect browser capabilities:
+          // http://www.modernizr.com/
+          if (!window.File || !window.FileReader) {
+            domUtils.show(dom.byId('uploadForm'));
+            domUtils.show(dom.byId('msg'));
+            return;
+          }
+
+          var mapCanvas = dom.byId("map");
+          // Reference
+          // http://www.html5rocks.com/features/file
+          // http://www.html5rocks.com/tutorials/dnd/basics/
+          // https://developer.mozilla.org/En/DragDrop/Drag_Operations
+          on(mapCanvas, "dragenter", function (event) {
+            // If we don't prevent default behavior here, browsers will
+            // perform the default action for the file being dropped i.e,
+            // point the page to the file.
+            event.preventDefault();
+          });
+
+          on(mapCanvas, "dragover", function (event) {
+            event.preventDefault();
+          });
+          on(mapCanvas, "drop", handleDrop);
+        }
+
+        function handleDrop (event) {
+          console.log("Drop: ", event);
+          event.preventDefault();
+          // Reference
+          // http://www.html5rocks.com/tutorials/file/dndfiles/
+          // https://developer.mozilla.org/en/Using_files_from_web_applications
+          var dataTransfer = event.dataTransfer,
+            files = dataTransfer.files,
+            types = dataTransfer.types;
+
+          // File drop?
+          if (files && files.length === 1) {
+            console.log("[ FILES ]");
+            var file = files[0]; // that's right I'm only reading one file
+            console.log("type = ", file.type);
+            if (file.type.indexOf("image/") !== -1) {
+              handleImage(file, event.layerX, event.layerY);
+            }
+            else if (file.name.indexOf(".csv") !== -1) {
+              handleCSV(file);
+            }
+          }
+
+          // Textual drop?
+          else if (types) {
+            console.log("[ TYPES ]");
+            console.log("  Length = ", types.length);
+            arrayUtils.forEach(types, function (type) {
+              if (type) {
+                console.log("  Type: ", type);
+                console.log("  Data: ", dataTransfer.getData(type));
+              }
+            });
+
+            // We're looking for URLs only.
+            var url;
+            arrayUtils.some(types, function (type) {
+              if (type.indexOf("text/uri-list") !== -1) {
+                url = dataTransfer.getData("text/uri-list");
+                return true;
+              }
+              else if (type.indexOf("text/x-moz-url") !== -1) {
+                url = dataTransfer.getData("text/plain");
+                return true;
+              }
+              else if (type.indexOf("text/plain") !== -1) {
+                url = dataTransfer.getData("text/plain");
+                url = url.replace(/^\s+|\s+$/g, "");
+                if (url.indexOf("http") === 0) {
+                  return true;
+                }
+              }
+              return false;
+            });
+
+            if (url) {
+              url = url.replace(/^\s+|\s+$/g, "");
+              // Check if this URL is a google search result.
+              // If so, parse it and extract the actual URL
+              // to the search result
+              if (url.indexOf("www.google.com/url") !== -1) {
+                var obj = urlUtils.urlToObject(url);
+                if (obj && obj.query && obj.query.url) {
+                  url = obj.query.url;
+                }
+              }
+
+              if (url.match(/MapServer\/?$/i)) {
+                // ArcGIS Server Map Service?
+                handleMapServer(url);
+              }
+              else if (url.match(/(Map|Feature)Server\/\d+\/?$/i)) {
+                // ArcGIS Server Map/Feature Service Layer?
+                handleFeatureLayer(url);
+              }
+              else if (url.match(/ImageServer\/?$/i)) {
+                // ArcGIS Server Image Service?
+                handleImageService(url);
+              }
+            }
+          }
+        }
+        
+        function handleCSV (file) {
+          console.log("Processing CSV: ", file, ", ", file.name, ", ", file.type, ", ", file.size);
+          if (file.data) {
+            var decoded = bytesToString(base64.decode(file.data));
+            processCSVData(decoded);
+          }
+          else {
+            var reader = new FileReader();
+            reader.onload = function () {
+              console.log("Finished reading CSV data");
+              processCSVData(reader.result);
+            };
+            reader.readAsText(file);
+          }
+        }
+        
+        function getFieldsFromStore(store){
+          recs = store.query();
+          var fields = [];
+          var fieldsArray = [];
+          arrayUtils.some(recs, function (rec) {
+            for(var key in rec) {
+              var value = rec[key];
+              if (arrayUtils.indexOf(locatorDisplayfields, key) != -1 || arrayUtils.indexOf(originalFields, key) != -1) {
+                fields.push(key);
+              }
+            }
+            var attrs1 = fields;
+            arrayUtils.forEach(attrs1, function (attr) {
+              fieldsArray.push({ label: attr, field: attr, editor: "text" });
+            });
+            return true;
+          });
+          return fieldsArray;
+        }
+        
+        function processCSVData (data) {
+          var newLineIndex = data.indexOf("\n");
+          var firstLine = lang.trim(data.substr(0, newLineIndex)); //remove extra whitespace, not sure if I need to do this since I threw out space delimiters
+          var separator = getSeparator(firstLine);
+          var csvStore = new CsvStore({
+            data: data,
+            separator: separator
+          });
+
+          csvStore.fetch({
+            onComplete: function (items) {
+              var objectId = 0;
+              
+              var fieldsArray = [];
+              var fields = {};
+              var columns = {};
+              
+              arrayUtils.some(items, function (item) {
+                var attrs1 = csvStore.getAttributes(item);
+                originalFields = attrs1;
+                fields[uniqueIdField] = uniqueIdField;
+                fieldsArray.push({ label: uniqueIdField, field: uniqueIdField });
+                arrayUtils.forEach(attrs1, function (attr) {
+                  fields[attr] = attr;
+                  columns[attr] = Editor({name: attr}, "text", "dblClick");
+                  fieldsArray.push({ label: attr, field: attr, editor: "text" });
+                });
+                return true;
+              });
+              
+              var records = [];
+              // Add records in this CSV store as graphics
+              arrayUtils.forEach(items, function (item) {
+                var attrs = csvStore.getAttributes(item),
+                  attributes = {};
+                // Read all the attributes for  this record/item
+                arrayUtils.forEach(attrs, function (attr) {
+                  var value = Number(csvStore.getValue(item, attr));
+                  attributes[attr] = isNaN(value) ? csvStore.getValue(item, attr) : value;
+                });
+
+                attributes[uniqueIdField] = objectId;
+                objectId++;
+                records.push(attributes);
+              });
+
+              orginalDataStore = Observable(new Memory({data: records, idProperty: uniqueIdField}));
+              
+              var getColumns = window.getColumns = function(editOn){
+                return arrayUtils.map(fieldsArray, function (column) {
+                  column.autoSave = true;
+                  if(editOn){
+                    column.editOn = editOn;
+                  }
+                  return Editor(column);
+                });
+              }              
+              
+              window.grid = new (declare([Grid, Keyboard, ColumnResizer]))({
+                // use Infinity so that all data is available in the grid
+                //bufferRows: Infinity,
+                sort: uniqueIdField,
+                store: orginalDataStore,
+                columns: getColumns("dblclick"),
+                selectionMode: "single"
+              }, "grid");
+              var q = orginalDataStore.query();
+              registry.byId("tab1").set("title", "Original Data (" + q.length + ")");
+              
+              grid.on("dgrid-datachange", function(evt){
+                console.log("data changed: ", evt.oldValue, " -> ", evt.value);
+                console.log("cell: ", evt.cell.row.id, evt.cell.column.field);
+              });
+              grid.on("dgrid-editor-show", function(evt){
+                console.log("show editOn editor: ", evt);
+              });
+              grid.on("dgrid-editor-hide", function(evt){
+                console.log("hide editOn editor: ", evt);
+              });
+              
+              //window.grid.renderArray(records);
+              //window.grid.set("columns", columns);
+              //window.grid.set("collection", dsMemStore);
+              //window.grid.set("collection", dsMemStore);
+            },
+            onError: function (error) {
+              console.error("Error fetching items from CSV store: ", error);
+            }
+          });
+          
+        }
+        
+        function getFieldsAsData() {
+          var data = [];
+          arrayUtils.forEach(originalFields, function(field){
+            data.push({id: field, label: field});
+          });
+          return data;
+        }
+        
+        function geocode() {
+          var store = new Memory({
+            data: getFieldsAsData()
+          });
+
+          var os = new ObjectStore({ objectStore: store });
+
+          
+          myDialog = new Dialog({
+              title: "My Dialog",
+              content: "Address Field: <div id='address'></div><br/>City: <div id='city'></div><br/> State: <div id='state'></div><br/> Zip: <div id='zip'></div><br/>",
+              style: "width: 300px"
+          });
+          myDialog.show();
+          var s = new Select({
+            store: os
+          }, "address");
+          
+
+          s.on("change", function(){
+              console.log("my value: ", this.get("value"))
+          })
+          s.startup();
+        }
+        
+        function geocodeAddress() {
+          geocode();
+          map.graphics.clear();
+          registry.byId("mainTabContainer").selectChild(registry.byId("tab2"));
+          var recs;
+          if (typeof orginalDataStore != 'undefined') {
+            recs = orginalDataStore.query();
+            arrayUtils.forEach(recs, function(rec){
+              lang.mixin(rec, {"Address": rec.address1, uniqueIdField: rec.OBJECTID, "State": rec.State});
+            });
+          }
+          
+          //SAMPLE DATA FOR TESTING PURPOSES
+          var addresses = [{
+            uniqueIdField: 0,
+            "Address": "440 Arguello Blvd",
+            "Postal": "94118"
+          }, {
+            uniqueIdField: 1,
+            "Address": "100 Arguello Blvd",
+            "Postal": "94118"
+          }];
+          //END SAMPLE DATA
+
+          locator.outSpatialReference = map.spatialReference;
+          
+          var options;
+          if (recs) {
+            options = {
+              addresses: recs, categories: ["Point Address", "Street Address"]
+            }
+          } else {
+            options = {
+              addresses: addresses, categories: ["Street Address"]
+            }
+          }
+
+          locator.addressesToLocations(options);
+        }
+        
+        function addRouteStops() {
+          directions.reset();
+          var i = 0;
+          var stop = {};
+          arrayUtils.forEach(map.graphics.graphics, function(graphic){
+            directions.addStop("",i);
+            stop = {};
+            stop.name = graphic.attributes.name + " - " + graphic.attributes.Match_addr;
+            stop.feature = {};
+            stop.feature.geometry = {};
+            stop.feature.attributes = {};
+            stop.feature.geometry.x = graphic.geometry.x;
+            stop.feature.geometry.y = graphic.geometry.y;
+            stop.feature.attributes.Score = graphic.attributes.Score;
+            stop.feature.attributes.Addr_type = graphic.attributes.Addr_type;
+            directions.updateStop(stop, i);
+            //directions.addStop(graphic.geometry);
+            i++
+          });
+        }
+        
+        function getSeparator (string) {
+          var separators = [",", "      ", ";", "|"];
+          var maxSeparatorLength = 0;
+          var maxSeparatorValue = "";
+          arrayUtils.forEach(separators, function (separator) {
+            var length = string.split(separator).length;
+            if (length > maxSeparatorLength) {
+              maxSeparatorLength = length;
+              maxSeparatorValue = separator;
+            }
+          });
+          return maxSeparatorValue;
+        }
+
+        function populateGrid(Memory) {
+          var qt = new QueryTask(window.statesUrl);
+          var query = new Query();
+          query.where = "1=1";
+          query.returnGeometry = false;
+          query.outFields = window.outFields;
+          qt.execute(query, function(results) {
+            var data = array.map(results.features, function(feature) {
+              return {
+                // property names used here match those used when creating the dgrid
+                "id": feature.attributes[window.outFields[0]],
+                "stateName": feature.attributes[window.outFields[1]],
+                "median": feature.attributes[window.outFields[2]],
+                "over1m": feature
+                .attributes[window.outFields[3]]
+              };
+            });
+            var memStore = new Memory({ data: data });
+            window.grid.set("store", memStore);
+          });
+        }
+
+        // fires when a row in the dgrid is clicked
+        function selectState(e) {
+          var row = grid3.row(e);
+          console.log(row.id);
+          arrayUtils.some(map.graphics.graphics, function(graphic){
+            if (String(graphic.attributes.ResultID) == row.id) {
+              map.infoWindow.setContent(graphic.getContent());
+              map.infoWindow.setTitle(graphic.getTitle());
+              require(["esri/geometry/screenUtils"], function(screenUtils) { 
+                map.infoWindow.show(screenUtils.toScreenPoint(map.extent, map.width, map.height, graphic.geometry),map.getInfoWindowAnchor(screenUtils.toScreenPoint(map.extent, map.width, map.height, graphic.geometry))); 
+                map.centerAndZoom(graphic.geometry, 15);
+              });
+              return true;
+            }
+            return false;
+          });
+        }
+
+        // fires when a feature on the map is clicked
+        function selectGrid(e) {
+          var id = e.graphic.attributes.OBJECTID;
+          // select the feature that was clicked
+          var query = new Query();
+          query.objectIds = [id];
+          var states = map.getLayer("states");
+          states.selectFeatures(query, FeatureLayer.SELECTION_NEW);
+          // select the corresponding row in the grid
+          // and make sure it is in view
+          grid.clearSelection();
+          grid.select(id);
+          grid.row(id).element.scrollIntoView();
+        }
+
+        function getCandidates(row) {
+          require([
+            "esri/request"
+          ], function(esriRequest) {
+            var addressObj = {Address:row.address1, City:row.city, Region:row.State, f:"json", outSR:{"wkid":102100,"latestWkid":3857},outFields:"*"}
+            var serviceURL = geocodeService + "/findAddressCandidates";
+            var candidatesRequest = esriRequest({
+              url: serviceURL,
+              content: addressObj,
+              handleAs: "json",
+              callbackParamName: "callback"
+            });
+            candidatesRequest.then(
+              function(response) {
+                console.log("Success: ", response);
+            }, function(error) {
+                console.log("Error: ", error.message);
+            });
+          });
+        }
+
+
+        //travelModesServiceUrl option points to logistics service hosted from ArcGIS Online
+        //by indicating this URL, a login prompt should not display
+        var directions = new Directions({
+          map: map,
+          travelModesServiceUrl: "http://utility.arcgis.com/usrsvcs/servers/cdc3efd03ddd4721b99adce219629489/rest/services/World/Utilities/GPServer",
+          autoSolve: false
+        },"dir");
+        directions.startup();
+        }
+      );
+    });
+    </script>
+  </head>
+  <body class="claro">
+    <div data-dojo-type="dijit/layout/BorderContainer" 
+         data-dojo-props="design:'headline', gutters:false" 
+         style="width:100%;height:100%;">
+      <div id="topPane" 
+           data-dojo-type="dijit/layout/ContentPane" 
+           data-dojo-props="region:'top'">
+           <button type="button" id="geocode">Geocode</button>
+           <button type="button" id="routeStops">Add to Route</button>
+      </div>   
+      <div data-dojo-type="dijit/layout/ContentPane" 
+           data-dojo-props="region:'right'" 
+           style="width:250px;">
+        
+        <div id="dir"></div>
+      </div>
+    <div id="bottomPane" data-dojo-type="dijit/layout/ContentPane" data-dojo-props="region: 'bottom', splitter:true"> 
+      <div id="mainTabContainer" data-dojo-type="dijit/layout/TabContainer"
+          data-dojo-props='persist:false, tabStrip:true' style="width: 400px;height: 20em;">
+
+        <div id="tab1" data-dojo-type="dijit/layout/ContentPane" data-dojo-props='title:"Original Data", 
+          tooltip:"Tooltip for tab #1"'><div id="grid"></div></div>
+
+        <div id="tab2" data-dojo-type="dijit/layout/ContentPane" data-dojo-props='title:"Unmatched", 
+          tooltip:"Tooltip for tab #2"'><div id="grid2"></div></div>
+          
+        <div id="tab3" data-dojo-type="dijit/layout/ContentPane" data-dojo-props='title:"Matched", 
+          tooltip:"Tooltip for tab #3"'><div id="grid3"></div></div>
+      </div>
+    </div>
+
+      <div id="map" 
+           data-dojo-type="dijit/layout/ContentPane" 
+           data-dojo-props="region:'center'">
+      </div>
+    </div>
+  </body>
+</html>
